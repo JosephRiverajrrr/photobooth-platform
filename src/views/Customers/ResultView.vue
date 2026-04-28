@@ -1,6 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import html2canvas from 'html2canvas'
+import { ref, onMounted, nextTick } from 'vue'
 import gifshot from 'gifshot'
 import QRCode from 'qrcode'
 import { useBooth } from '../../composable/useBooth'
@@ -11,6 +10,9 @@ const gifUrl = ref(null)
 const qrCode = ref(null)
 const shareUrl = ref('')
 
+/* ─────────────────────────────
+   GIF GENERATION
+───────────────────────────── */
 function generateGif() {
   gifshot.createGIF(
     {
@@ -19,17 +21,19 @@ function generateGif() {
       gifWidth: 200,
       gifHeight: 150
     },
-    function (obj) {
-      if (!obj.error) {
-        gifUrl.value = obj.image
-      }
+    (obj) => {
+      if (!obj.error) gifUrl.value = obj.image
     }
   )
 }
 
+/* ─────────────────────────────
+   QR GENERATION
+───────────────────────────── */
 function generateQR() {
   const id = Math.random().toString(36).substring(2, 10)
   shareUrl.value = `${window.location.origin}/share/${id}`
+
   QRCode.toDataURL(shareUrl.value).then(url => {
     qrCode.value = url
   })
@@ -40,17 +44,92 @@ onMounted(() => {
   generateQR()
 })
 
-async function download() {
-  const element = document.getElementById('photo-strip')
-  const canvas = await html2canvas(element, {
-    backgroundColor: null,
-    scale: 3,
-    useCORS: true
+/* ─────────────────────────────
+   IMAGE LOADER
+───────────────────────────── */
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = src
   })
-  const image = canvas.toDataURL('image/png')
+}
+
+/* ─────────────────────────────
+   OBJECT-FIT: COVER REPLACEMENT
+───────────────────────────── */
+function drawCover(ctx, img, x, y, w, h) {
+  const imgRatio = img.width / img.height
+  const boxRatio = w / h
+
+  let sx, sy, sw, sh
+
+  if (imgRatio > boxRatio) {
+    // crop left/right
+    sh = img.height
+    sw = img.height * boxRatio
+    sx = (img.width - sw) / 2
+    sy = 0
+  } else {
+    // crop top/bottom
+    sw = img.width
+    sh = img.width / boxRatio
+    sx = 0
+    sy = (img.height - sh) / 2
+  }
+
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h)
+}
+
+/* ─────────────────────────────
+   MAIN EXPORT ENGINE
+───────────────────────────── */
+async function download() {
+  await nextTick()
+
+  const template = selectedTemplate.value
+
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+
+  // base size (match your strip ratio)
+  const width = 220
+  const height = 660
+
+  const scale = 3
+  canvas.width = width * scale
+  canvas.height = height * scale
+  ctx.scale(scale, scale)
+
+  // 1. draw frame background
+  const frameImg = await loadImage(template.bg)
+  ctx.drawImage(frameImg, 0, 0, width, height)
+
+  // 2. draw photos
+  for (let i = 0; i < template.position.length; i++) {
+    const slot = template.position[i]
+    const imgSrc = capturedPhotos.value[i]
+
+    if (!imgSrc) continue
+
+    const img = await loadImage(imgSrc)
+
+    drawCover(
+      ctx,
+      img,
+      slot.left ?? 35,
+      slot.top,
+      slot.width ?? 150,
+      slot.height ?? 150
+    )
+  }
+
+  // 3. export
   const link = document.createElement('a')
-  link.href = image
   link.download = 'photobooth.png'
+  link.href = canvas.toDataURL('image/png')
   link.click()
 }
 </script>
@@ -59,45 +138,43 @@ async function download() {
   <div class="result">
     <div class="flex justify-between gap-x-12 items-center">
 
-      <!-- LEFT: Photo Strip -->
+      <!-- LEFT: PREVIEW STRIP -->
       <div class="strip">
-        <div id="photo-strip" class="strip-container">
+        <div class="strip-container">
 
-          <!-- 🎨 OVERLAY is the BASE (film strip frame) -->
-          <img
-            class="overlay-base"
-            :src="selectedTemplate.bg"
-          />
+          <img class="overlay-base" :src="selectedTemplate.bg" />
 
-          <!-- 📸 PHOTOS sit on top, clipped into the frame slots -->
-      <div class="photos">
-        <img
-          v-for="(slot, i) in selectedTemplate.position"
-          :key="i"  
-          :src="capturedPhotos[i]"
-          class="photo-img"
-          :style="{
-            top: slot.top + 'px',
-            left: slot.left + 'px',
-            width: slot.width + 'px',
-            height: slot.height + 'px'
-          }"
-        />
-      </div>
+          <div class="photos">
+            <div
+              v-for="(slot, i) in selectedTemplate.position"
+              :key="i"
+              class="photo-slot"
+              :style="{
+                top: slot.top + 'px',
+                left: '35px',
+                width: '150px',
+                height: '150px'
+              }"
+            >
+              <img :src="capturedPhotos[i]" />
+            </div>
+          </div>
 
         </div>
       </div>
 
-      <!-- RIGHT: GIF preview + QR -->
+      <!-- RIGHT PANEL -->
       <div class="right-panel">
-        <div v-if="gifUrl">
-          <img :src="gifUrl" class="gif-preview" />
-        </div>
+        <img v-if="gifUrl" :src="gifUrl" class="gif-preview" />
 
         <div class="qr-section">
           <p class="label">Scan to download</p>
           <img v-if="qrCode" :src="qrCode" class="qr-img" />
-          <button class="start-btn" @click="download()">⬇ Download</button>
+
+          <button class="start-btn" @click="download">
+            ⬇ Download
+          </button>
+
           <a class="start-btn" href="/">Start Again</a>
         </div>
       </div>
@@ -107,67 +184,50 @@ async function download() {
 </template>
 
 <style scoped>
-/* ── Layout ── */
 .result {
   background: #7a0c0c;
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
 }
 
-/* ── Film Strip ── */
+/* ── STRIP ── */
 .strip-container {
   position: relative;
   width: 220px;
-  /* Height matches your template image aspect ratio.
-     Adjust if your bg image is a different size. */
   height: 660px;
 }
 
-/* The overlay IS the film strip — it fills the container */
 .overlay-base {
   position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
-  z-index: 0;
   pointer-events: none;
+  z-index: 2;
 }
 
-/* Photos layer — behind the overlay so the film border shows on top */
+/* ── PREVIEW PHOTOS ── */
 .photos {
+  inset: 0;
+  z-index: 1;
+}
+
+.photo-slot {
   position: absolute;
-  top: 0;
-  left: 0;
+  overflow: hidden;
+  z-index: 2;
+}
+
+.photo-slot img {
   width: 100%;
   height: 100%;
-  z-index: 0;
-}
-
-.photo-img {
-  position: absolute;
-  /* 
-    These offsets match the 3 frame slots visible in your film strip template.
-    The film strip has ~30px sprocket holes on each side, so photos start at x≈30px.
-    Adjust top values to line up with YOUR specific template's frame positions.
-  */
-  left: 35px;
-  width: 150px;   /* inner frame width (220 - 30px each side) */
-  height: 150px;
-  object-fit: unset;
-
-}
-.photo-img {
-  position: absolute;
   object-fit: cover;
 }
- 
-/* ── Right Panel ── */
+
+/* ── RIGHT SIDE ── */
 .right-panel {
   display: flex;
   flex-direction: column;
@@ -177,7 +237,7 @@ async function download() {
 
 .gif-preview {
   width: 260px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .qr-section {
@@ -196,20 +256,16 @@ async function download() {
   width: 140px;
 }
 
-/* ── Buttons ── */
+/* ── BUTTON ── */
 .start-btn {
-  display: inline-block;
-  margin-top: 4px;
   padding: 10px 24px;
   border: 2px solid white;
   background: transparent;
   color: white;
   cursor: pointer;
   font-weight: bold;
-  font-size: 0.9rem;
   text-decoration: none;
-  text-align: center;
-  transition: background 0.3s, color 0.3s;
+  transition: 0.3s;
 }
 
 .start-btn:hover {

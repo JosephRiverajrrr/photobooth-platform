@@ -27,9 +27,9 @@ const templates = ref([
     ]
   },
   {
-    name: 'Minimal White',
+    name: 'IOS Music Player',
     slots: 3,
-    bg: '/templates/white.png',
+    bg: '/templates/ios-music.png',
     position: [
       { top: 18, left: 35, width: 150, height: 150 },
       { top: 185, left: 35, width: 150, height: 150 },
